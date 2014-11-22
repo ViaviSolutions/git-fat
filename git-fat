@@ -496,16 +496,25 @@ class GitFat(object):
             if filecmp.cmp(self.objdir + '/' + fatfile, local + '/' + fatfile) is False:
                 raise GitFat.PushError('Failed when pushing fat file "%s" to local "%s"' % (self.objdir + '/' + fatfile, local))
         self.convert_digest_to_symlink(files, local)
+    def git_remote_exists(self):
+        args = ['git', 'remote']
+        p = subprocess.Popen(args, stdout=subprocess.PIPE)
+        output = p.communicate()[0].strip()
+        if p.returncode or not output:
+            return False
+        else:
+            return True
     def git_push(self, all=None):
-        cmd = ['git', 'push']
-        if all:
-            cmd.append('--all')
-        print('Running ' + ' '.join(cmd) + ' ...')
-        try:
-            sys.stdout.write( subprocess.check_output(cmd) )
-            sys.stdout.flush()
-        except subprocess.CalledProcessError, e:
-            raise GitFat.PushError('Failed when pushing to remote git repo - Exit code: %d\n%s' % (e.returncode, e.output))
+        if self.git_remote_exists():
+            cmd = ['git', 'push']
+            if all:
+                cmd.append('--all')
+            print('Running ' + ' '.join(cmd) + ' ...')
+            try:
+                sys.stdout.write( subprocess.check_output(cmd) )
+                sys.stdout.flush()
+            except subprocess.CalledProcessError, e:
+                raise GitFat.PushError('Failed when pushing to remote git repo - Exit code: %d\n%s' % (e.returncode, e.output))
     def cmd_push(self, args):
         'Push all (fat)files (as opposed to symlinks to various (fat)files in local/..) that I have stored and referenced'
         self.setup()
@@ -561,13 +570,14 @@ class GitFat(object):
         if p.returncode:
             sys.exit(p.returncode)
     def git_pull(self):
-        cmd = ['git', 'pull']
-        print('Running ' + ' '.join(cmd) + ' ...')
-        try:
-            sys.stdout.write( subprocess.check_output(cmd) )
-            sys.stdout.flush()
-        except subprocess.CalledProcessError, e:
-            raise GitFat.PullError('Failed when pulling from remote git repo - Exit code: %d\n%s' % (e.returncode, e.output))
+        if self.git_remote_exists():
+            cmd = ['git', 'pull']
+            print('Running ' + ' '.join(cmd) + ' ...')
+            try:
+                sys.stdout.write( subprocess.check_output(cmd) )
+                sys.stdout.flush()
+            except subprocess.CalledProcessError, e:
+                raise GitFat.PullError('Failed when pulling from remote git repo - Exit code: %d\n%s' % (e.returncode, e.output))
     def cmd_pull(self, args):
         'Pull anything that I have referenced, but not stored'
         self.setup()
