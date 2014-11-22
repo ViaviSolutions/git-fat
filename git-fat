@@ -17,6 +17,10 @@ import threading
 import time
 import collections
 
+if not type(sys.version_info) is tuple and sys.version_info.major > 2:
+    sys.stderr.write('git-fat does not support Python-3 yet.  Please use python2.\n')
+    sys.exit(1)
+
 try:
     from subprocess import check_output
     del check_output
@@ -127,7 +131,10 @@ class GitFat(object):
     PullError = RuntimeError
     def __init__(self):
         self.verbose = verbose_stderr if os.environ.get('GIT_FAT_VERBOSE') else verbose_ignore
-        self.gitroot = subprocess.check_output('git rev-parse --show-toplevel'.split()).strip()
+        try:
+            self.gitroot = subprocess.check_output('git rev-parse --show-toplevel'.split()).strip()
+        except subprocess.CalledProcessError:
+            sys.exit(1)
         self.gitdir = subprocess.check_output('git rev-parse --git-dir'.split()).strip()
         self.objdir = os.path.join(self.gitdir, 'fat', 'objects')
         if os.environ.get('GIT_FAT_VERSION') == '1':
@@ -352,42 +359,58 @@ class GitFat(object):
         if not quiet:
             print('  Finding all fat objects referenced by: %s' % rev)
 
+        # Revision list gives us object names to inspect with cat-file...
         p1 = subprocess.Popen(['git','rev-list','--objects',rev], stdout=subprocess.PIPE)
-        p2 = subprocess.Popen(['git','cat-file','--batch-check'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
         def cut_sha1hash(input, output):
             for line in input:
                 output.write(line.split()[0] + '\n')
             output.close()
-        cut_thread = threading.Thread(target=cut_sha1hash, args=(p1.stdout, p2.stdin))
-
-        # Run 'cat-file' in '--batch' mode to greatly improve performance. Doing the alternative means
-        # starting a new 'cat-file -p' for each line of p2.stdout and that takes about 15 minutes whereas
-        # the '--batch' mode takes only about 1-3 seconds, for a list of about 20,000 entries.
-        # The trade-off for performance here is that an assumption has to be made as follows: the fat object
-        # must be a single-line file (the file that is self.magiclens-byte long).
-        p3 = subprocess.Popen(['git','cat-file','--batch'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-        def get_fatobj(input, output):
+        # ...`cat-file --batch-check` filters for git-fat object candidates in bulk...
+        p2 = subprocess.Popen(['git','cat-file','--batch-check'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        def filter_gitfat_candidates(input, output):
             for line in input:
                 objhash, objtype, size = line.split()
                 if objtype == 'blob' and int(size) in self.magiclens:
                     output.write(objhash + '\n')
             output.close()
-        fat_thread = threading.Thread(target=get_fatobj, args=(p2.stdout, p3.stdin))
-
+        # ...`cat-file --batch` provides full contents of git-fat candidates in bulk
+        p3 = subprocess.Popen(['git','cat-file','--batch'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        # Stream data: p1 | cut_thread | p2 | filter_thread | p3
+        cut_thread = threading.Thread(target=cut_sha1hash, args=(p1.stdout, p2.stdin))
+        filter_thread = threading.Thread(target=filter_gitfat_candidates, args=(p2.stdout, p3.stdin))
         cut_thread.start()
-        fat_thread.start()
-        magiclens = [' blob ' + str(x) for x in self.magiclens]
-        for line in p3.stdout:
-            if line == '' or line.rstrip('\n').endswith(tuple(magiclens)):
-                continue
+        filter_thread.start()
+        # Process metadata + content format provided by `cat-file --batch`
+        while True:
+            metadata_line = p3.stdout.readline()
+            if not metadata_line:
+                break  # EOF
+            objhash, objtype, size_str = metadata_line.split()
+            size, bytes_read = int(size_str), 0
+            # We know from filter that item is a candidate git-fat object and
+            # is small enough to read into memory and process
+            content = ''
+            while bytes_read < size:
+                data = p3.stdout.read(size - bytes_read)
+                if not data:
+                    break  # EOF
+                content += data
+                bytes_read += len(data)
             try:
-                fathash = self.decode(line)[0]
+                fathash = self.decode(content)[0]
                 referenced.add(fathash)
             except GitFat.DecodeError:
                 pass
+            # Consume LF record delimiter in `cat-file --batch` output
+            bytes_read = 0
+            while bytes_read < 1:
+                data = p3.stdout.read(1)
+                if not data:
+                    break  # EOF
+                bytes_read += len(data)
+        # Ensure everything is cleaned up
         cut_thread.join()
-        fat_thread.join()
-
+        filter_thread.join()
         p1.wait()
         p2.wait()
         p3.wait()
@@ -672,7 +695,7 @@ class GitFat(object):
         time1 = time.time()
         self.verbose('Found %d paths in %.3f s' % (len(pathsizes), time1-time0))
         maxlen = max(map(len,pathsizes)) if pathsizes else 0
-        for path, sizes in sorted(pathsizes.items(), cmp=lambda (p1,s1),(p2,s2): cmp(max(s1),max(s2)), reverse=True):
+        for path, sizes in sorted(pathsizes.items(), key=lambda p,s: max(s), reverse=True):
             print('%-*s filter=fat -text # %10d %d' % (maxlen, path,max(sizes),len(sizes)))
         revlist.wait()
         difftree.wait()
