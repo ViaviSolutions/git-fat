@@ -10,8 +10,8 @@ cd fat-test
 git fat init
 cat - >> .gitfat <<EOF
 [rsync]
-local = /tmp/fat-store
 remote = /tmp/fat-store
+share = /tmp/fat-store
 EOF
 echo '*.fat filter=fat -crlf' > .gitattributes
 git add .gitattributes .gitfat

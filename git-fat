@@ -160,12 +160,14 @@ class GitFat(object):
     def get_fat_rsync_dirs(self):
         cfgpath  = self.get_fat_config()
         remote   = gitconfig_get('rsync.remote', file=cfgpath)
-        local    = gitconfig_get('rsync.local', file=cfgpath)
+        share    = gitconfig_get('rsync.share', file=cfgpath)
         if remote is None:
             raise GitFat.ConfigError('No rsync.remote in %s' % cfgpath)
-        if local is None:
-            local = self.objdir
-        return remote, local
+        if share is None:
+            share    = gitconfig_get('rsync.local', file=cfgpath)
+            if share is None:
+                share = self.objdir
+        return remote, share
     def get_fat_rsync_ssh(self):
         cfgpath  = self.get_fat_config()
         ssh_port = gitconfig_get('rsync.sshport', file=cfgpath)
@@ -188,33 +190,33 @@ class GitFat(object):
         cmd += [src + '/', dst + '/']
         return cmd
     def pushpull_to_rsync(self,push,cnt):
-        (remote, local) = self.get_fat_rsync_dirs()
+        (remote, share) = self.get_fat_rsync_dirs()
         if push:
             src = self.objdir
             dst = remote
             self.verbose('git-fat pushpull_to_rsync: %d file(s) found to push to %s' % (cnt, remote))
         else:
             src = remote
-            dst = local         # If local is set up, smudge filter will take care of linking self.objdir to local during merge|rebase step of 'pull', therefore always pull from remote to local here.
+            dst = share         # If share is set up, smudge filter will take care of linking self.objdir to share during merge|rebase step of 'pull', therefore always pull from remote to share here.
             self.verbose('git-fat pushpull_to_rsync: %d file(s) found to pull from %s' % (cnt, remote))
         return self.get_rsync_command(src, dst)
-    def symlink_to_local(self, digest):
-        'Create self.objdir/digest (links) pointing at local/digest if the configuration of local is set up appropriately'
-        (remote, local) = self.get_fat_rsync_dirs()
-        if local == self.objdir or not os.path.exists(local):       # Do nothing if local is not set up or points at a non-existing path.
+    def symlink_to_share(self, digest):
+        'Create self.objdir/digest (links) pointing at share/digest if the configuration of share is set up appropriately'
+        (remote, share) = self.get_fat_rsync_dirs()
+        if share == self.objdir or not os.path.exists(share):       # Do nothing if share is not set up or points at a non-existing path.
             return
-        localfile = os.path.join(local, digest)
+        sharefile = os.path.join(share, digest)
         objfile   = os.path.join(self.objdir, digest)
         if os.path.lexists(objfile):
             os.remove(objfile)
-        os.symlink(localfile, objfile)                              # Note that localfile may not exist, i.e. may be creating a broken symlink. It is OK as we may not have pulled from remote (to local) yet.
-    def convert_digest_to_symlink(self, files, local):
-        'Replace self.objdir/digest in files with links pointing at local/digest'
+        os.symlink(sharefile, objfile)                              # Note that sharefile may not exist, i.e. may be creating a broken symlink. It is OK as we may not have pulled from remote (to share) yet.
+    def convert_digest_to_symlink(self, files, share):
+        'Replace self.objdir/digest in files with links pointing at share/digest'
         for digest in files:
             fat = os.path.join(self.objdir, digest)
-            localfile = os.path.join(local, digest)
+            sharefile = os.path.join(share, digest)
             os.remove(fat)
-            os.symlink(localfile, fat)
+            os.symlink(sharefile, fat)
     def revparse(self, revname):
         return subprocess.check_output(['git', 'rev-parse', revname]).strip()
     def encode_v1(self, digest, bytes):
@@ -322,7 +324,7 @@ class GitFat(object):
         self.filter_clean(sys.stdin, sys.stdout, args)
 
     def cmd_filter_smudge(self, args):
-        'On-demand retrieval of referenced fat files are supported from the local and then remote so you do not have to fetch all fat files up front'
+        'On-demand retrieval of referenced fat files are supported from the share and then remote so you do not have to fetch all fat files up front'
         'Note that self.objdir/fatfile is not replaced by a symlink when it is available AND readable. Otherwise, a symlink in its place is created'
         self.setup()
         filename = str(args[0])
@@ -330,8 +332,8 @@ class GitFat(object):
         if isinstance(result, str):       # We got a digest
             objfile = os.path.join(self.objdir, result)
             if not os.access(objfile, os.R_OK):
-                self.verbose('git-fat filter-smudge: fat object missing %s (required by %s) - will query local, if available, and try again' % (objfile, filename))
-                self.symlink_to_local(result)
+                self.verbose('git-fat filter-smudge: fat object missing %s (required by %s) - will query share, if available, and try again' % (objfile, filename))
+                self.symlink_to_share(result)
             if not os.access(objfile, os.R_OK):
                 self.verbose('git-fat filter-smudge: fat object missing %s (required by %s) - will query remote, if available, and try again' % (objfile, filename))
                 self.pull_from_remote(set([result]))
@@ -470,32 +472,32 @@ class GitFat(object):
             sys.exit(p.returncode)
         # Diff - This extra check is only supported if remote is accessible as a directory on the machine git-fat is running
         self.verbose('git-fat push to remote: Checking for identicality of fat files: %s' % ' '.join(cmd))
-        (remote, local) = self.get_fat_rsync_dirs()
+        (remote, share) = self.get_fat_rsync_dirs()
         if os.path.exists(remote):
             for fatfile in files:
                 if filecmp.cmp(self.objdir + '/' + fatfile, remote + '/' + fatfile) is False:
                     raise GitFat.PushError('Failed when pushing fat file "%s" to remote "%s"' % (self.objdir + '/' + fatfile, remote))
-    def push_to_local(self, files):
-        (remote, local) = self.get_fat_rsync_dirs()
-        if local == self.objdir or not os.path.exists(local):           # Do nothing if local is not set up or points at a non-existing path.
+    def push_to_share(self, files):
+        (remote, share) = self.get_fat_rsync_dirs()
+        if share == self.objdir or not os.path.exists(share):           # Do nothing if share is not set up or points at a non-existing path.
             return
         if len(files) == 0:
-            print('Nothing found to push to local')
+            print('Nothing found to push to share')
             return
-        self.verbose('git-fat push to local: %d file(s) found to push to %s' % (len(files), local))
-        cmd = self.get_rsync_command(self.objdir, local, usessh=False)  # ssh parameters do not apply to local. They are for remote only.
-        self.verbose('git-fat push to local: Executing: %s' % ' '.join(cmd))
+        self.verbose('git-fat push to share: %d file(s) found to push to %s' % (len(files), share))
+        cmd = self.get_rsync_command(self.objdir, share, usessh=False)  # ssh parameters do not apply to share. They are for remote only.
+        self.verbose('git-fat push to share: Executing: %s' % ' '.join(cmd))
         p = subprocess.Popen(cmd, stdin=subprocess.PIPE)
         p.communicate(input='\x00'.join(files))
         if p.returncode:
             sys.exit(p.returncode)
-        # Diff - This extra check is only supported if local is accessible as a directory on the machine git-fat is running
-        #        Because local is already validated above to be accessible as a directory, no need to check for it again.
-        self.verbose('git-fat push to local: Checking for identicality of fat files: %s' % ' '.join(cmd))
+        # Diff - This extra check is only supported if share is accessible as a directory on the machine git-fat is running
+        #        Because share is already validated above to be accessible as a directory, no need to check for it again.
+        self.verbose('git-fat push to share: Checking for identicality of fat files: %s' % ' '.join(cmd))
         for fatfile in files:
-            if filecmp.cmp(self.objdir + '/' + fatfile, local + '/' + fatfile) is False:
-                raise GitFat.PushError('Failed when pushing fat file "%s" to local "%s"' % (self.objdir + '/' + fatfile, local))
-        self.convert_digest_to_symlink(files, local)
+            if filecmp.cmp(self.objdir + '/' + fatfile, share + '/' + fatfile) is False:
+                raise GitFat.PushError('Failed when pushing fat file "%s" to share "%s"' % (self.objdir + '/' + fatfile, share))
+        self.convert_digest_to_symlink(files, share)
     def git_remote_exists(self):
         args = ['git', 'remote']
         p = subprocess.Popen(args, stdout=subprocess.PIPE)
@@ -516,17 +518,17 @@ class GitFat(object):
             except subprocess.CalledProcessError, e:
                 raise GitFat.PushError('Failed when pushing to remote git repo - Exit code: %d\n%s' % (e.returncode, e.output))
     def cmd_push(self, args):
-        'Push all (fat)files (as opposed to symlinks to various (fat)files in local/..) that I have stored and referenced'
+        'Push all (fat)files (as opposed to symlinks to various (fat)files in share/..) that I have stored and referenced'
         self.setup()
         # Default to push only those objects referenced by current HEAD
         # (includes history). Finer-grained pushing is implemented via
-        # 'local', supported whether --all is specified or not.
+        # 'share', supported whether --all is specified or not.
         # --all, if specified, is passed to 'git push' as well.
         pushall = '--all' in args
         print('Determining fat files to push...')
         files = self.referenced_objects(all=pushall) & self.fat_files()
         self.push_to_remote(files)
-        self.push_to_local(files)
+        self.push_to_share(files)
         self.git_push(all=pushall)
 
     def checkout(self, show_orphans=False):
@@ -535,7 +537,7 @@ class GitFat(object):
         for digest, fname in self.orphan_files():
             objpath = os.path.join(self.objdir, digest)
             if not os.access(objpath, os.R_OK):
-                self.symlink_to_local(digest)
+                self.symlink_to_share(digest)
             if not os.access(objpath, os.R_OK):
                 self.pull_from_remote(set([digest]))
             if os.access(objpath, os.R_OK):
@@ -767,39 +769,38 @@ class GitFat(object):
         objdir = os.path.join(self.gitroot, self.objdir)
         # Directories
         print('Directories used by git-fat:')
-        print('- objdir : Contains fat files that have not been pushed out yet as well as sym links to pushed out fat files.')
-        print('           Sym links will never exist if \'local\' is not set up.')
-        print('           (' + objdir + ')')
+        print('- objdir : Contains fat objects(files and/or shared links). Shared links will only exist if \'share\' is configured.')
+        print('            (' + objdir + ')')
         try:
-            (remote, local) = self.get_fat_rsync_dirs()
+            (remote, share) = self.get_fat_rsync_dirs()
         except GitFat.ConfigError:
-            (remote, local) = ('', objdir)
+            (remote, share) = ('', objdir)
             pass
-        print('- local  : Contains fat files (no sym links), which by definition are the pushed out files.')
-        print('           To increase performance, you are recommended to set this spot to be on a local NAS on your site.')
-        print('           This directory is shared across all your repos/wcps as well as by your peers if they are using it.')
-        print('           Setting up this directory offers disk space saving as well as allows fine grained push operation => faster push performance.')
-        print('           If this configuration option is not set up, its value defaults to \'objdir\'.')
-        print('           (' + local + ')')
-        print('- remote : Contains fat files (no sym links), which by definition are the pushed out files.')
-        print('           This directory is where everyone who use this repo pushes their fat files onto.')
-        print('           (' + remote + ')')
-        print('local and remote are configured via ' + self.get_fat_config())
+        print('- share   : Directory containing pushed out fat files.')
+        print('            To increase performance, you are recommended to set this spot to be on a local NAS on your site.')
+        print('            This directory is shared across all your repos/wcps as well as by your peers if they are using it.')
+        print('            Setting up this directory offers disk space saving as well as allows fine grained push operation => faster push performance.')
+        print('            If this configuration option is not set up, its value defaults to \'objdir\'.')
+        print('            (' + share + ')')
+        print('- remote  : Rsync destination containing pushed out fat files.')
+        print('            This rsync destination is where everyone who uses this repo pushes their fat files onto.')
+        print('            (' + remote + ')')
+        print('share and remote are configured via ' + self.get_fat_config())
         print()
         # Definitions
         print('Definitions used by git-fat:')
         print('- reference objects : List of all fat objects referenced by your working copy. These named files are expected to exist in \'objdir\'.')
-        print('- catalog objects   : List of all entries (files & sym links) in \'objdir\'')
+        print('- catalog objects   : List of all fat objects in \'objdir\'')
         print('- orphan objects    : reference - catalog   (subtraction)')
         print('- garbage objects   : catalog - reference   (subtraction)')
         print()
         # Operation
         print('Two primary functions of git-fat are clean and smudge filters that git invokes as necessary:')
         print('- filter-clean      : (large) file content (input) => translated (small) reference file (output)')
-        print('-                        Creates the fat object (a file, not a sym link) in \'objdir/...\' using the (large) file content. Its name is based on its SHA1.')
+        print('-                        Creates the fat object in \'objdir/...\' using the (large) file content. Its name is based on its SHA1.')
         print('- filter-smudge     : (small) reference file (stdin) => recovered (large) file content (stdout)')
-        print('                         Creates a sym link:   \'objdir/...\' -> \'local/...\' for the (large) file (name is based on its SHA1). Bypassed if \'objdir/...\' already exists.')
-        print('                         If \'objdir/...\' is broken, it brings in the (large) file from \'remote\' to \'local\' ==> recovers the file.')
+        print('                         Creates a shared link:   \'objdir/...\' -> \'share/...\' for the (large) file (name is based on its SHA1). Bypassed if \'objdir/...\' already exists.')
+        print('                         If \'objdir/...\' is broken, it brings in the (large) file from \'remote\' to \'share\' ==> recovers the file.')
         print('')
         print('Additional useful functions offered by git-fat are:')
         print('- git fat status    : Prints orphan and garbage objects')
@@ -812,15 +813,15 @@ class GitFat(object):
         print('- git clone ...       : See git checkout.')
         print('- git fetch           : git-fat is not involved.')
         print('- git fat pull        : Runs git pull')
-        print('                        Brings in data for orphan objects, computed per HEAD (including history) of your working copy, from \'remote\' to \'local\'.')
-        print('                        Creates a sym link:   \'objdir/...\' -> \'local/...\' for each orphan object that HEAD points at (no history) ==> No longer orphan.')
+        print('                        Brings in data for orphan objects, computed per HEAD (including history) of your working copy, from \'remote\' to \'share\'.')
+        print('                        Creates a sym link:   \'objdir/...\' -> \'share/...\' for each orphan object that HEAD points at (no history) ==> No longer orphan.')
         print('                        Lets git invoke git-fat\'s filter-smudge function')
         print('- git fat pull --all  : Same as git fat pull except that the orphan objects are computed across all git objects,')
         print('                        not just per what HEAD (including history) of your working copy.')
         print('- git fat push        : reference & fat files (not sym links), where & is the intersection operation, is pushed out to:')
         print('                        - \'remote\'. Diff the same file set between \'objdir\' and \'remote\'. Abort if mismatches.')
-        print('                        - \'local\'.  Diff the same file set between \'objdir\' and \'remote\'. Abort if mismatches.')
-        print('                        Replaces each such file in \'objdir\' with a sym link, pointing at \'local/...\'.')
+        print('                        - \'share\'.  Diff the same file set between \'objdir\' and \'share\'. Abort if mismatches.')
+        print('                        Replaces each such file in \'objdir\' with a sym link, pointing at \'share/...\'.')
         print('                        Runs git push')
         print('- git fat push --all  : Same steps as git fat push except that reference is computed across all git objects,')
         print('                        not just what your HEAD (including history) is pointing at.')

@@ -2,6 +2,7 @@
 
 fullpath() { echo "`pwd`/$1"; }
 
+rm -rf retro retro-clone retro-store
 git init retro
 cd retro
 cp /usr/share/dict/words words.big
@@ -41,6 +42,7 @@ git checkout master
 cat > .gitfat <<EOF
 [rsync]
 remote = $(fullpath ../retro-store)
+share = $(fullpath ../retro-store)
 EOF
 git add .gitfat
 git commit -m'Add .gitfat for local push'
