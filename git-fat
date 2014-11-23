@@ -506,17 +506,9 @@ class GitFat(object):
             return False
         else:
             return True
-    def git_push(self, all=None):
+    def cmd_pre_push(self, args):
         if self.git_remote_exists():
-            cmd = ['git', 'push']
-            if all:
-                cmd.append('--all')
-            print('Running ' + ' '.join(cmd) + ' ...')
-            try:
-                sys.stdout.write( subprocess.check_output(cmd) )
-                sys.stdout.flush()
-            except subprocess.CalledProcessError, e:
-                raise GitFat.PushError('Failed when pushing to remote git repo - Exit code: %d\n%s' % (e.returncode, e.output))
+            self.cmd_push("")
     def cmd_push(self, args):
         'Push all (fat)files (as opposed to symlinks to various (fat)files in share/..) that I have stored and referenced'
         self.setup()
@@ -525,12 +517,10 @@ class GitFat(object):
         # 'share', supported whether --all is specified or not.
         # --all, if specified, is passed to 'git push' as well.
         pushall = '--all' in args
-        print('Determining fat files to push...')
+        #print('Determining fat files to push...')
         files = self.referenced_objects(all=pushall) & self.fat_files()
         self.push_to_remote(files)
         self.push_to_share(files)
-        self.git_push(all=pushall)
-
     def checkout(self, show_orphans=False):
         'Update any stale files in the present working tree'
         self.assert_init_done()
@@ -571,15 +561,9 @@ class GitFat(object):
         stdoutdata = p.communicate(input='\x00'.join(files))
         if p.returncode:
             sys.exit(p.returncode)
-    def git_pull(self):
+    def cmd_post_merge(self, args):
         if self.git_remote_exists():
-            cmd = ['git', 'pull']
-            print('Running ' + ' '.join(cmd) + ' ...')
-            try:
-                sys.stdout.write( subprocess.check_output(cmd) )
-                sys.stdout.flush()
-            except subprocess.CalledProcessError, e:
-                raise GitFat.PullError('Failed when pulling from remote git repo - Exit code: %d\n%s' % (e.returncode, e.output))
+            self.cmd_pull("")
     def cmd_pull(self, args):
         'Pull anything that I have referenced, but not stored'
         self.setup()
@@ -592,8 +576,7 @@ class GitFat(object):
             rev = self.revparse(arg)
             if rev:
                 refargs['rev'] = rev
-        self.git_pull()
-        print('Determining fat files to pull...')
+        #print('Determining fat files to pull...')
         files = self.filter_objects(refargs, self.parse_pull_patterns(args))
         self.pull_from_remote(files)
         self.checkout()
@@ -653,6 +636,23 @@ class GitFat(object):
         return False
     def fat_init_all(self):
         ret = False
+        
+        post_merge = os.path.join(self.gitdir, 'hooks', 'post-merge')
+        if not os.path.isfile(post_merge):
+            with open(post_merge, "w") as f:
+                lines = ["#!/bin/sh -ex\n", "git fat post-merge \"$@\"\n"]
+                f.writelines(lines)
+            os.chmod(post_merge, 0755)
+            ret = True
+        
+        pre_push = os.path.join(self.gitdir, 'hooks', 'pre-push')
+        if not os.path.isfile(pre_push):
+            with open(pre_push, "w") as f:
+                lines = ["#!/bin/sh -ex\n", "git fat pre-push \"$@\"\n"]
+                f.writelines(lines)
+            os.chmod(pre_push, 0755)         
+            ret = True
+        
         ret = self.fat_init_one('filter.fat.clean', 'git-fat filter-clean %f') or ret
         ret = self.fat_init_one('filter.fat.smudge', 'git-fat filter-smudge %f') or ret
         ret = self.fat_init_one('filter.fat.required', 'true') or ret
@@ -660,6 +660,7 @@ class GitFat(object):
     def cmd_init(self):
         self.setup()
         if self.fat_init_all() is True:
+            self.cmd_post_merge("")
             print('Initialized git fat')
     def gen_large_blobs(self, revs, threshsize):
         """Build dict of all blobs"""
@@ -843,6 +844,10 @@ if __name__ == '__main__':
         fat.cmd_filter_clean(sys.argv[2:])
     elif cmd == 'filter-smudge':
         fat.cmd_filter_smudge(sys.argv[2:])
+    elif cmd == 'pre-push':
+        fat.cmd_pre_push(sys.argv[2:])
+    elif cmd == 'post-merge':
+        fat.cmd_post_merge(sys.argv[2:])
     elif cmd == 'init':
         fat.cmd_init()
     elif cmd == 'status':

@@ -52,4 +52,4 @@ cd ..
 git clone file:///$(fullpath retro) retro-clone
 cd retro-clone
 git fat init
-git fat pull
+git pull
