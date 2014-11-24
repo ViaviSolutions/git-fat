@@ -1,5 +1,6 @@
 #!/bin/sh -ex
 
+export GIT_FAT_VERBOSE=1
 fullpath() { echo "`pwd`/$1"; }
 
 rm -rf retro retro-clone retro-store
@@ -24,7 +25,7 @@ cat > .gitattributes <<EOF
 EOF
 git add .gitattributes
 git checkout .
-git commit -am'Import big files into git-fat'
+git commit -am 'Import big files into git-fat'
 
 git log --stat
 
