@@ -320,11 +320,11 @@ class GitFat(object):
         The clean filter runs when a file is added to the index. It gets the "smudged" (tree)
         version of the file on stdin and produces the "clean" (repository) version on stdout.
         '''
-        self.setup()
+        self.cmd_init()
         self.filter_clean(sys.stdin, sys.stdout, args)
 
     def cmd_filter_smudge(self, args):
-        self.setup()
+        self.cmd_init()
         filename = str(args[0])
         result, bytes = self.decode_stream(sys.stdin)
         if isinstance(result, str):       # We got a digest
@@ -485,16 +485,32 @@ class GitFat(object):
         else:
             return True
     def cmd_pre_push(self, args):
+        self.cmd_init()
         if self.git_remote_exists():
-            self.cmd_push("")
+            self.cmd_push("pre")
     def cmd_push(self, args):
         'Push all fat files that I have stored and referenced'
         self.setup()
         # Default to push only those objects referenced by current HEAD (includes history)
+        pre = 'pre' in args
         pushall = '--all' in args
         files = self.referenced_objects(all=pushall) & self.fat_files()
         self.push_to_remote(files)
         self.push_to_share(files)
+        if not pre:
+            self.git_push(all=pushall)
+
+    def git_push(self, all=None):
+        cmd = ['git', 'push']
+        if all:
+            cmd.append('--all')
+        print('Running ' + ' '.join(cmd) + ' ...')
+        try:
+            sys.stdout.write( subprocess.check_output(cmd) )
+            sys.stdout.flush()
+        except subprocess.CalledProcessError, e:
+            raise GitFat.PushError('Failed when pushing to remote git repo - Exit code: %d\n%s' % (e.returncode, e.output))
+
     def checkout(self, show_orphans=False):
         'Update any stale files in the present working tree'
         self.assert_init_done()
@@ -536,9 +552,11 @@ class GitFat(object):
         if p.returncode:
             sys.exit(p.returncode)
     def cmd_post_merge(self, args):
+        self.cmd_init()
         if self.git_remote_exists():
             self.cmd_pull("")
     def cmd_pre_rebase(self, args):
+        self.cmd_init()
         if self.git_remote_exists():
             self.cmd_pull("")
     def cmd_pull(self, args):
@@ -613,7 +631,9 @@ class GitFat(object):
         return False
     def fat_init_all(self):
         ret = False
-        
+        ret = self.fat_init_one('filter.fat.clean', 'git-fat filter-clean %f') or ret
+        ret = self.fat_init_one('filter.fat.smudge', 'git-fat filter-smudge %f') or ret
+        ret = self.fat_init_one('filter.fat.required', 'true') or ret
         post_merge = os.path.join(self.gitdir, 'hooks', 'post-merge')
         if not os.path.isfile(post_merge):
             with open(post_merge, "w") as f:
@@ -621,32 +641,30 @@ class GitFat(object):
                 f.writelines(lines)
             os.chmod(post_merge, 0755)
             ret = True
-        
+
         pre_rebase = os.path.join(self.gitdir, 'hooks', 'pre-rebase')
         if not os.path.isfile(pre_rebase):
             with open(pre_rebase, "w") as f:
                 lines = ["#!/bin/sh -ex\n", "git fat pre-rebase \"$@\"\n"]
                 f.writelines(lines)
-            os.chmod(pre_rebase, 0755)         
+            os.chmod(pre_rebase, 0755)
             ret = True
-        
+
         pre_push = os.path.join(self.gitdir, 'hooks', 'pre-push')
         if not os.path.isfile(pre_push):
             with open(pre_push, "w") as f:
                 lines = ["#!/bin/sh -ex\n", "git fat pre-push \"$@\"\n"]
                 f.writelines(lines)
-            os.chmod(pre_push, 0755)         
+            os.chmod(pre_push, 0755)
             ret = True
-        
-        ret = self.fat_init_one('filter.fat.clean', 'git-fat filter-clean %f') or ret
-        ret = self.fat_init_one('filter.fat.smudge', 'git-fat filter-smudge %f') or ret
-        ret = self.fat_init_one('filter.fat.required', 'true') or ret
+
         return ret
-    def cmd_init(self):
+    def cmd_init(self, quiet=False):
         self.setup()
         if self.fat_init_all() is True:
-            self.cmd_post_merge("")
-            print('Initialized git fat')
+            #self.cmd_post_merge("")
+            if quiet is False:
+                print('Initialized git fat')
     def gen_large_blobs(self, revs, threshsize):
         """Build dict of all blobs"""
         time0 = time.time()
@@ -798,33 +816,39 @@ class GitFat(object):
         print('Typical git operations, when is git-fat involved and what it does when it is invoked:')
         print('- git clone ...       : See git checkout.')
         print('- git fetch           : git-fat is not involved.')
-        print('- git fat pull        : Runs git pull')
+        print('- git pull            : Runs git fat pull via post-merge or pre-rebase githook')
         print('                        Brings in data for orphan objects, computed per HEAD (including history) of your working copy, from \'remote\' to \'share\'.')
         print('                        Creates a sym link:   \'objdir/...\' -> \'share/...\' for each orphan object that HEAD points at (no history) ==> No longer orphan.')
         print('                        Lets git invoke git-fat\'s filter-smudge function')
         print('- git fat pull --all  : Same as git fat pull except that the orphan objects are computed across all git objects,')
         print('                        not just per what HEAD (including history) of your working copy.')
-        print('- git fat push        : reference & fat files (not sym links), where & is the intersection operation, is pushed out to:')
-        print('                        - \'remote\'. Diff the same file set between \'objdir\' and \'remote\'. Abort if mismatches.')
-        print('                        - \'share\'.  Diff the same file set between \'objdir\' and \'share\'. Abort if mismatches.')
+        print('- git push            : Runs git fat push via pre-push githook')
+        print('                        reference & fat files (not sym links), where & is the intersection operation, is pushed out to:')
+        print('                        \'remote\'. Diff the same file set between \'objdir\' and \'remote\'. Abort if mismatches.')
+        print('                         \'share\'.  Diff the same file set between \'objdir\' and \'share\'. Abort if mismatches.')
         print('                        Replaces each such file in \'objdir\' with a sym link, pointing at \'share/...\'.')
+        print('- git fat push        : Runs git fat push directly - for backwards compatability with legacy,')
         print('                        Runs git push')
         print('- git fat push --all  : Same steps as git fat push except that reference is computed across all git objects,')
         print('                        not just what your HEAD (including history) is pointing at.')
         print('')
-        print('- git checkout ...    : git invokes git-fat filter-smudge for each file .gitattributes indicates so.')
-        print('- git add <path/file> : git invokes git-fat filter-clean if .gitattributes has a matching line for <path/file>.')
+        print('- git checkout ...    : git invokes git-fat filter-smudge for each file configured in .gitattributes and post-merge githook.')
+        print('- git add <path/file> : git invokes git-fat filter-clean for each file configured in .gitattributes.')
         print('- git commit -a [...] : See git add.')
-        print('- git merge ...       : git invokes git-fat filter-clean and filter-smudge for each file .gitattributes indicates so.')
-        print('- git rebase ...      : git invokes git-fat filter-clean and filter-smudge for each file .gitattributes indicates so.')
-        print('- git cherry-pick ... : git invokes git-fat filter-clean and filter-smudge for each file .gitattributes indicates so.')
-        print('- git revert ...      : git invokes git-fat filter-clean and filter-smudge for each file .gitattributes indicates so.')
+        print('- git merge ...       : git invokes git-fat filter-clean and filter-smudge for each file configured in .gitattributes and post-merge githook.')
+        print('- git rebase ...      : git invokes git-fat filter-clean and filter-smudge for each file configured in .gitattributes and pre-rebase githook.')
+        print('- git cherry-pick ... : git invokes git-fat filter-clean and filter-smudge for each file configured in .gitattributes and post-merge githook.')
+        print('- git revert ...      : git invokes git-fat filter-clean and filter-smudge for each file configured in .gitattributes and post-merge githook.')
 
 
 if __name__ == '__main__':
     'print("Starting git-fat for file: ", str(sys.argv[2]), file=sys.stderr)'
     fat = GitFat()
     cmd = sys.argv[1] if len(sys.argv) > 1 else ''
+    # Make sure init stays quiet unless explicitely called
+    if cmd != 'init':
+        fat.cmd_init(True)
+
     if cmd == 'filter-clean':
         fat.cmd_filter_clean(sys.argv[2:])
     elif cmd == 'filter-smudge':
