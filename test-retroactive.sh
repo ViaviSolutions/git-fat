@@ -1,7 +1,9 @@
 #!/bin/sh -ex
 
+export GIT_FAT_VERBOSE=1
 fullpath() { echo "`pwd`/$1"; }
 
+rm -rf retro retro-clone retro-store
 git init retro
 cd retro
 cp /usr/share/dict/words words.big
@@ -23,7 +25,7 @@ cat > .gitattributes <<EOF
 EOF
 git add .gitattributes
 git checkout .
-git commit -am'Import big files into git-fat'
+git commit -am 'Import big files into git-fat'
 
 git log --stat
 
@@ -41,6 +43,7 @@ git checkout master
 cat > .gitfat <<EOF
 [rsync]
 remote = $(fullpath ../retro-store)
+share = $(fullpath ../retro-store)
 EOF
 git add .gitfat
 git commit -m'Add .gitfat for local push'
@@ -50,4 +53,4 @@ cd ..
 git clone file:///$(fullpath retro) retro-clone
 cd retro-clone
 git fat init
-git fat pull
+git pull
