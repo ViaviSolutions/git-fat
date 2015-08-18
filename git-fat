@@ -359,13 +359,13 @@ class GitFat(object):
             print('  Finding all fat objects referenced by: %s' % rev)
 
         # Revision list gives us object names to inspect with cat-file...
-        p1 = subprocess.Popen(['git','rev-list','--objects',rev], stdout=subprocess.PIPE)
+        p1 = subprocess.Popen(['git','rev-list','--objects',rev], stdout=subprocess.PIPE, close_fds=True)
         def cut_sha1hash(input, output):
             for line in input:
                 output.write(line.split()[0] + '\n')
             output.close()
         # ...`cat-file --batch-check` filters for git-fat object candidates in bulk...
-        p2 = subprocess.Popen(['git','cat-file','--batch-check'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        p2 = subprocess.Popen(['git','cat-file','--batch-check'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True)
         def filter_gitfat_candidates(input, output):
             for line in input:
                 objhash, objtype, size = line.split()
@@ -373,7 +373,7 @@ class GitFat(object):
                     output.write(objhash + '\n')
             output.close()
         # ...`cat-file --batch` provides full contents of git-fat candidates in bulk
-        p3 = subprocess.Popen(['git','cat-file','--batch'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        p3 = subprocess.Popen(['git','cat-file','--batch'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True)
         # Stream data: p1 | cut_thread | p2 | filter_thread | p3
         cut_thread = threading.Thread(target=cut_sha1hash, args=(p1.stdout, p2.stdin))
         filter_thread = threading.Thread(target=filter_gitfat_candidates, args=(p2.stdout, p3.stdin))
@@ -677,8 +677,8 @@ class GitFat(object):
             for line in input:
                 output.write(line[:40] + '\n')
             output.close()
-        revlist = subprocess.Popen(['git', 'rev-list', '--all', '--objects'], stdout=subprocess.PIPE, bufsize=-1)
-        objcheck = subprocess.Popen(['git', 'cat-file', '--batch-check'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=-1)
+        revlist = subprocess.Popen(['git', 'rev-list', '--all', '--objects'], stdout=subprocess.PIPE, bufsize=-1, close_fds=True)
+        objcheck = subprocess.Popen(['git', 'cat-file', '--batch-check'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=-1, close_fds=True)
         hashonly = threading.Thread(target=hash_only, args=(revlist.stdout, objcheck.stdin))
         hashonly.start()
         numblobs = 0; numlarge = 1
@@ -703,9 +703,9 @@ class GitFat(object):
         time0 = time.time()
         # Find all names assumed by large blobs (those in blobsizes)
         pathsizes = collections.defaultdict(lambda:set())
-        revlist = subprocess.Popen(['git', 'rev-list', '--all'], stdout=subprocess.PIPE, bufsize=-1)
+        revlist = subprocess.Popen(['git', 'rev-list', '--all'], stdout=subprocess.PIPE, bufsize=-1, close_fds=True)
         difftree = subprocess.Popen(['git', 'diff-tree', '--root', '--no-renames', '--no-commit-id', '--diff-filter=AMCR', '-r', '--stdin', '-z'],
-                                    stdin=revlist.stdout, stdout=subprocess.PIPE)
+                                    stdin=revlist.stdout, stdout=subprocess.PIPE, close_fds=True)
         for newblob, modflag, path in difftreez_reader(difftree.stdout):
             bsize = blobsizes.get(newblob)
             if bsize:                     # We care about this blob
@@ -720,8 +720,8 @@ class GitFat(object):
     def cmd_index_filter(self, args):
         manage_gitattributes = '--manage-gitattributes' in args
         filelist = set(f.strip() for f in open(args[0]).readlines())
-        lsfiles = subprocess.Popen(['git', 'ls-files', '-s'], stdout=subprocess.PIPE)
-        updateindex = subprocess.Popen(['git', 'update-index', '--index-info'], stdin=subprocess.PIPE)
+        lsfiles = subprocess.Popen(['git', 'ls-files', '-s'], stdout=subprocess.PIPE, close_fds=True)
+        updateindex = subprocess.Popen(['git', 'update-index', '--index-info'], stdin=subprocess.PIPE, close_fds=True)
         for line in lsfiles.stdout:
             mode, sep, tail = line.partition(' ')
             blobhash, sep, tail = tail.partition(' ')
@@ -742,8 +742,8 @@ class GitFat(object):
             try:
                 cleanedobj = open(hashfile).read().rstrip()
             except IOError:
-                catfile = subprocess.Popen(['git', 'cat-file', 'blob', blobhash], stdout=subprocess.PIPE)
-                hashobject = subprocess.Popen(['git', 'hash-object', '-w', '--stdin'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+                catfile = subprocess.Popen(['git', 'cat-file', 'blob', blobhash], stdout=subprocess.PIPE, close_fds=True)
+                hashobject = subprocess.Popen(['git', 'hash-object', '-w', '--stdin'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, close_fds=True)
                 def dofilter():
                     self.filter_clean(catfile.stdout, hashobject.stdin, filename)
                     hashobject.stdin.close()
