@@ -1,0 +1,18 @@
+Source: git-fat
+Section: Viavi/Development
+Priority: optional
+Maintainer: Mike Nicholson <mike.nicholson@viavisolutions.com>
+Build-Depends: debhelper (>= 9.0.0), python (>= 2.6.6)
+Standards-Version: 3.9.5
+Homepage: https://github.com/ViaviSolutions/git-fat
+#Vcs-Git: git://git.debian.org/collab-maint/git-fat.git
+#Vcs-Browser: http://git.debian.org/?p=collab-maint/git-fat.git;a=summary
+
+Package: git-fat
+Architecture: all
+Depends: git,
+         rsync,
+	 ${misc:Depends},
+	 ${python:Depends}
+Description: Large file versioning for Git
+ This version of git-fat includes changes made by and for Viavi Solutions
